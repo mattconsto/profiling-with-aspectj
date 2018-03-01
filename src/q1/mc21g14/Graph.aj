@@ -48,7 +48,7 @@ public aspect Graph {
 	 * @return The formatted String.
 	 */
 	public String formatJoin(JoinPoint.StaticPart join) {
-		return join == null ? null : join.getSignature().toString().replaceFirst("^[^\\s]*\\s+[^.]+\\.", "");
+		return join == null ? null : join.getSignature().toString().replaceFirst("^[^\\s]*\\s+", "");
 	}
 	
 	/**

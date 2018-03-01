@@ -69,9 +69,9 @@ public aspect Graph {
 	
 	// Data storage
 	Map<Integer, Pair<Integer, Integer>> histogram = new HashMap<>(); // a:input, b:output
-	Map<JoinPoint.StaticPart, Integer> successes = new HashMap<>();
-	Map<JoinPoint.StaticPart, Integer> failures = new HashMap<>();
-	Map<JoinPoint.StaticPart, List<Long>> runtimes = new HashMap<>();
+	Map<String, Integer> successes = new HashMap<>();
+	Map<String, Integer> failures = new HashMap<>();
+	Map<String, List<Long>> runtimes = new HashMap<>();
 	
 	/**
 	 * Nicely format the JoinPoint according to the specification, stripping out the return type.
@@ -79,7 +79,7 @@ public aspect Graph {
 	 * @return The formatted String.
 	 */
 	public String formatJoin(JoinPoint.StaticPart join) {
-		return join == null ? null : join.getSignature().toString().replaceFirst("^[^\\s]*\\s+[^.]+\\.", "");
+		return join == null ? null : join.getSignature().toString().replaceFirst("^[^\\s]*\\s+", "");
 	}
 	
 	/**
@@ -136,14 +136,14 @@ public aspect Graph {
 		proceed(args);
 		
 		// Write failures
-		for(JoinPoint.StaticPart key : this.failures.keySet()) {
-			this.failureWriter.append(formatJoin(key) + ", " + (100.0 * this.failures.get(key) / (this.successes.get(key) + this.failures.get(key))) + "%\n");
+		for(String key : this.failures.keySet()) {
+			this.failureWriter.append(key + ", " + (100.0 * this.failures.get(key) / (this.successes.get(key) + this.failures.get(key))) + "%\n");
 		}
 		
 		// Write runtimes
-		for(Map.Entry<JoinPoint.StaticPart, List<Long>> entry : this.runtimes.entrySet()) {
+		for(Map.Entry<String, List<Long>> entry : this.runtimes.entrySet()) {
 			// In nanoseconds!
-			this.runtimeWriter.append(formatJoin(entry.getKey()) + ", " + this.mean(entry.getValue()) + ", " + this.stdev(entry.getValue()) + "\n");
+			this.runtimeWriter.append(entry.getKey() + ", " + this.mean(entry.getValue()) + ", " + this.stdev(entry.getValue()) + "\n");
 		}
 		
 		this.failureWriter.close();
@@ -163,27 +163,28 @@ public aspect Graph {
 			System.err.println("Failed to open files for tracing! Execution will continue, but with tracing disabled.");
 			e.printStackTrace();
 		}
-
+		
+		String key = formatJoin(thisJoinPointStaticPart);
 		this.histogram = new HashMap<>();
 		
 		// Update lastSignature to match method, and write the first node called.
 		this.signatureTrace = new Stack<>();
 		this.signatureTrace.push(thisJoinPointStaticPart.getSignature());
 
-		if(!this.failures.containsKey(thisJoinPointStaticPart) || !this.successes.containsKey(thisJoinPointStaticPart)) {
-			this.failures.put(thisJoinPointStaticPart, 0);
-			this.successes.put(thisJoinPointStaticPart, 0);
+		if(!this.failures.containsKey(key) || !this.successes.containsKey(key)) {
+			this.failures.put(key, 0);
+			this.successes.put(key, 0);
 		}
 		
 		// Compute runtime
-		if(!this.runtimes.containsKey(thisJoinPointStaticPart)) this.runtimes.put(thisJoinPointStaticPart, new ArrayList<>());
+		if(!this.runtimes.containsKey(key)) this.runtimes.put(key, new ArrayList<>());
 		long start = System.nanoTime();
 		int result = proceed(i);
 		long end = System.nanoTime();
-		this.runtimes.get(thisJoinPointStaticPart).add(end - start);
+		this.runtimes.get(key).add(end - start);
 
 		// Success!
-		this.successes.put(thisJoinPointStaticPart, this.failures.get(thisJoinPointStaticPart) + 1);
+		this.successes.put(key, this.failures.get(key) + 1);
 		
 		// Write histograms
 		for(Map.Entry<Integer, Pair<Integer, Integer>> entry : this.histogram.entrySet()) {
@@ -209,32 +210,33 @@ public aspect Graph {
 			e.printStackTrace();
 		}
 		
+		String key = formatJoin(thisJoinPointStaticPart);
 		this.histogram = new HashMap<>();
 		
 		// Update lastSignature to match method, and write the first node called.
 		this.signatureTrace = new Stack<>();
 		this.signatureTrace.push(thisJoinPointStaticPart.getSignature());
 
-		if(!this.failures.containsKey(thisJoinPointStaticPart) || !this.successes.containsKey(thisJoinPointStaticPart)) {
-			this.failures.put(thisJoinPointStaticPart, 0);
-			this.successes.put(thisJoinPointStaticPart, 0);
+		if(!this.failures.containsKey(key) || !this.successes.containsKey(key)) {
+			this.failures.put(key, 0);
+			this.successes.put(key, 0);
 		}
 		
 		try {
 			// Compute runtime
-			if(!this.runtimes.containsKey(thisJoinPointStaticPart)) this.runtimes.put(thisJoinPointStaticPart, new ArrayList<>());
+			if(!this.runtimes.containsKey(key)) this.runtimes.put(key, new ArrayList<>());
 			long start = System.nanoTime();
 			int result = proceed(i);
 			long end = System.nanoTime();
-			this.runtimes.get(thisJoinPointStaticPart).add(end - start);
+			this.runtimes.get(key).add(end - start);
 
 			// Success!
-			this.successes.put(thisJoinPointStaticPart, this.failures.get(thisJoinPointStaticPart) + 1);
+			this.successes.put(key, this.failures.get(key) + 1);
 
 			return result;
 		} catch(Exception e) {
 			// Nope.
-			this.failures.put(thisJoinPointStaticPart, this.failures.get(thisJoinPointStaticPart) + 1);
+			this.failures.put(key, this.failures.get(key) + 1);
 			throw e;
 		} finally {
 			// Write histograms
@@ -259,9 +261,10 @@ public aspect Graph {
 			this.histogram.get(i).a++;
 			
 			// Ensure that call key exists to avoid exceptions
-			if(!this.failures.containsKey(thisJoinPointStaticPart) || !this.successes.containsKey(thisJoinPointStaticPart)) {
-				this.failures.put(thisJoinPointStaticPart, 0);
-				this.successes.put(thisJoinPointStaticPart, 0);
+			String key = formatJoin(thisJoinPointStaticPart);
+			if(!this.failures.containsKey(key) || !this.successes.containsKey(key)) {
+				this.failures.put(key, 0);
+				this.successes.put(key, 0);
 			}
 		}
 	}
@@ -275,7 +278,8 @@ public aspect Graph {
 			if(!this.histogram.containsKey(i)) this.histogram.put(i, new Pair<Integer, Integer>(0, 0));
 			this.histogram.get(i).b++;
 			
-			this.failures.put(thisJoinPointStaticPart, this.failures.get(thisJoinPointStaticPart) + 1);
+			String key = formatJoin(thisJoinPointStaticPart);
+			this.successes.put(key, this.successes.get(key) + 1);
 		}
 	}
 	
@@ -284,7 +288,8 @@ public aspect Graph {
 		if(compareSignatures(this.signatureTrace.peek(), thisJoinPointStaticPart.getSignature())) {
 			this.signatureTrace.pop();
 			
-			this.successes.put(thisJoinPointStaticPart, this.failures.get(thisJoinPointStaticPart) + 1);
+			String key = formatJoin(thisJoinPointStaticPart);
+			this.failures.put(key, this.failures.get(key) + 1);
 		}
 	}
 }
