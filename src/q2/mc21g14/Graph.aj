@@ -1,11 +1,8 @@
 package q2.mc21g14;
 
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.util.Stack;
-
-import org.aspectj.lang.JoinPoint;
-import org.aspectj.lang.Signature;
+import java.io.*;
+import java.util.*;
+import org.aspectj.lang.*;
 
 // Write an aspect that refines your solution to Part 1 (where package name q1 is replaced throughout by
 // q2) by not providing an arc from mi to mj if mj throws an exception instance of
@@ -16,6 +13,8 @@ import org.aspectj.lang.Signature;
 public aspect Graph {
 	/**
 	 * A helper class that stores the signature, list of edges, and list of nodes.
+	 * A stack, or chain, of signatures is required to avoid providing output for example A.
+	 * Storing the edges and nodes at each level allows for rolling back changes after an exception occurs.
 	 */
 	public class Trace {
 		public Signature signature;
@@ -32,16 +31,16 @@ public aspect Graph {
 	// Define each pointcut used, for cleaner code.
 	pointcut any():     call(* *()); // Matches any call, anywhere.
 	pointcut main():    execution(public static void main(String[])) && !cflowbelow(any()); // Matches the original main method.
-	pointcut entryex(): call(public * q2..*(int) throws Exception) && !within(q2..*); // Matches the entry into anything in q2 that throws exceptions.
-	pointcut entry():   call(public * q2..*(int)) && !within(q2..*) && !entryex(); // Matches the entry into anything in q2 that doesn't.
-	pointcut cut():     cflowbelow(entry()) && call(* q2..*(int)); // Any valid call below an entry point.
+	pointcut entryex(): call(public * q2..*(int) throws Exception) && (!within(q2..*) || (within(q2..*) && main())); // Matches the entry into anything in q2 that throws exceptions.
+	pointcut entry():   call(public * q2..*(int)) && (!within(q2..*) || (within(q2..*) && main())) && !entryex(); // Matches the entry into anything in q2 that doesn't.
+	pointcut cut():     (cflowbelow(entry()) || cflowbelow(entryex())) && call(* q2..*(int)); // Any valid call below an entry point.
 	
 	// Writers for tracing.
-	PrintWriter edgeWriter;
-	PrintWriter nodeWriter;
+	protected PrintWriter edgeWriter;
+	protected PrintWriter nodeWriter;
 	
 	// Stack for keeping track
-	Stack<Trace> stackTrace = new Stack<>();
+	protected Stack<Trace> stackTrace = new Stack<>();
 	
 	/**
 	 * Nicely format the JoinPoint according to the specification, stripping out the return type.
@@ -89,6 +88,8 @@ public aspect Graph {
 	
 	/**
 	 * For each entry point, start tracing.
+	 * This is necessary as if an exception can be thrown, it needs to be handled differently so that it is able to re-throw the exception.
+	 * Because of a "circular advice precedence" error, this unfortunately cannot be split up into before()/after() pointcuts and handled separately.
 	 * @param i An integer.
 	 * @return An integer.
 	 */
@@ -108,6 +109,8 @@ public aspect Graph {
 
 	/**
 	 * For each entry point that throws exceptions, start tracing.
+	 * This is necessary as if an exception can be thrown, it needs to be handled differently so that it is able to re-throw the exception.
+	 * Because of a "circular advice precedence" error, this unfortunately cannot be split up into before()/after() pointcuts and handled separately.
 	 * @param i An integer.
 	 * @return An integer.
 	 */
@@ -141,7 +144,7 @@ public aspect Graph {
 			
 			// Push to the stack
 			this.stackTrace.push(new Trace(thisJoinPointStaticPart.getSignature(), 
-				this.stackTrace.peek().edges + source + " -> " + target + "\n", 
+				this.stackTrace.peek().edges + source + " -> " + target + "\n",
 				this.stackTrace.peek().nodes + target + "\n"
 			));
 		}
@@ -154,7 +157,7 @@ public aspect Graph {
 	after() returning(int i): cut() {
 		// Check that the call is called by the last call (Hopefully that makes sense).
 		if(compareSignatures(this.stackTrace.peek().signature, thisJoinPointStaticPart.getSignature())) {
-			// Move the last element up the stack, keeping signature intact
+			// Move the last element up the stack, keeping the parent signature intact
 			Trace item = this.stackTrace.pop();
 			Signature signature = this.stackTrace.pop().signature;
 			this.stackTrace.push(new Trace(signature, item.edges, item.nodes));

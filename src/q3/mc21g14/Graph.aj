@@ -1,16 +1,8 @@
 package q3.mc21g14;
 
-import java.io.PrintWriter;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.OptionalDouble;
-import java.util.Stack;
-import java.io.IOException;
-
-import org.aspectj.lang.JoinPoint;
-import org.aspectj.lang.Signature;
+import java.io.*;
+import java.util.*;
+import org.aspectj.lang.*;
 
 // Write an aspect to obtain an input/output summary of the methods identified in Part 1 (where package
 // name q1 is replaced throughout by q3).
@@ -41,37 +33,31 @@ public aspect Graph {
 		public PairA a;
 		public PairB b;
 		
-		public Pair(PairA a, PairB b) {
-			this.a = a;
-			this.b = b;
-		}
-		
+		public Pair(PairA a, PairB b) {this.a = a; this.b = b;}
 		@Override
-		public String toString() {
-			return "[" + this.a + ", " + this.b + "]";
-		}
+		public String toString() {return "[" + this.a + ", " + this.b + "]";}
 	}
 	
 	// Define each pointcut used, for cleaner code.
 	pointcut any():     call(* **.*()); // Matches any call, anywhere.
 	pointcut main():    execution(public static void main(String[])) && !cflowbelow(any()); // Matches the original main method.
-	pointcut entryex(): call(public * q3..*(int) throws Exception) && !within(q3..*); // Matches the entry into anything in q3 that throws exceptions.
-	pointcut entry():   call(public * q3..*(int)) && !within(q3..*) && !entryex(); // Matches the entry into anything in q3 that doesn't.
-	pointcut cut():     cflowbelow(entry()) && call(* q3..*(int)); // Any valid call below an entry point.
+	pointcut entryex(): call(public * q3..*(int) throws Exception) && (!within(q3..*) || (within(q3..*) && main())); // Matches the entry into anything in q3 that throws exceptions.
+	pointcut entry():   call(public * q3..*(int)) && (!within(q3..*) || (within(q3..*) && main())) && !entryex(); // Matches the entry into anything in q3 that doesn't.
+	pointcut cut():     (cflowbelow(entry()) || cflowbelow(entryex())) && call(* q3..*(int)); // Any valid call below an entry point.
 	
 	// Writers for tracing.
-	PrintWriter histogramWriter;
-	PrintWriter failureWriter;
-	PrintWriter runtimeWriter;
+	protected PrintWriter histogramWriter;
+	protected PrintWriter failureWriter;
+	protected PrintWriter runtimeWriter;
 	
 	// Stack for keeping track
-	Stack<Signature> signatureTrace = new Stack<>();
+	protected Stack<Signature> signatureTrace = new Stack<>();
 	
 	// Data storage
-	Map<Integer, Pair<Integer, Integer>> histogram = new HashMap<>(); // a:input, b:output
-	Map<String, Integer> successes = new HashMap<>();
-	Map<String, Integer> failures = new HashMap<>();
-	Map<String, List<Long>> runtimes = new HashMap<>();
+	protected Map<String, Map<Integer, Pair<Integer, Integer>>> histogram = new HashMap<>(); // a:input, b:output
+	protected Map<String, Integer> successes = new HashMap<>();
+	protected Map<String, Integer> failures = new HashMap<>();
+	protected Map<String, List<Double>> runtimes = new HashMap<>();
 	
 	/**
 	 * Nicely format the JoinPoint according to the specification, stripping out the return type.
@@ -79,7 +65,10 @@ public aspect Graph {
 	 * @return The formatted String.
 	 */
 	public String formatJoin(JoinPoint.StaticPart join) {
-		return join == null ? null : join.getSignature().toString().replaceFirst("^[^\\s]*\\s+", "");
+		return join == null ? null : formatJoin(join.getSignature());
+	}
+	public String formatJoin(Signature sig) {
+		return sig == null ? null : sig.toString().replaceFirst("^[^\\s]*\\s+", "");
 	}
 	
 	/**
@@ -103,8 +92,7 @@ public aspect Graph {
 	 * @return The mean
 	 */
 	public <T> double mean(List<T> list) {
-		OptionalDouble optional = list.stream().mapToDouble(l -> ((Number) l).doubleValue()).average();
-		return optional.isPresent() ? optional.getAsDouble() : 0.0;
+		return list.stream().mapToDouble(l -> ((Number) l).doubleValue()).average().orElse(0);
 	}
 	
 	/**
@@ -115,8 +103,7 @@ public aspect Graph {
 	public <T> double stdev(List<T> list) {
 		if(list.size() == 0) return 0.0;
 		double mean = mean(list);
-		double distance = list.stream().mapToDouble(l -> Math.pow(((Number) l).doubleValue() - mean, 2)).sum();
-		return Math.sqrt(distance / list.size());
+		return Math.sqrt(list.stream().mapToDouble(l -> Math.pow(((Number) l).doubleValue() - mean, 2)).sum() / list.size());
 	}
 	
 	/**
@@ -141,9 +128,27 @@ public aspect Graph {
 		}
 		
 		// Write runtimes
-		for(Map.Entry<String, List<Long>> entry : this.runtimes.entrySet()) {
-			// In nanoseconds!
+		for(Map.Entry<String, List<Double>> entry : this.runtimes.entrySet()) {
+			// In milliseconds!
 			this.runtimeWriter.append(entry.getKey() + ", " + this.mean(entry.getValue()) + ", " + this.stdev(entry.getValue()) + "\n");
+		}
+
+		// Write histograms
+		for(Map.Entry<String, Map<Integer, Pair<Integer, Integer>>> entry1 : this.histogram.entrySet()) {
+			PrintWriter histogramWriter = null;
+			try {
+				histogramWriter = new PrintWriter(entry1.getKey() + "-hist.csv");
+			} catch (IOException e) {
+				System.err.println("Failed to open files for tracing! Execution will continue, but with tracing disabled.");
+				e.printStackTrace();
+			}
+
+			// Write histograms
+			for(Map.Entry<Integer, Pair<Integer, Integer>> entry2 : entry1.getValue().entrySet()) {
+				histogramWriter.append(entry2.getKey() + ", " + entry2.getValue().a + ", " + entry2.getValue().b + "\n");
+			}
+			
+			histogramWriter.close();
 		}
 		
 		this.failureWriter.close();
@@ -156,42 +161,35 @@ public aspect Graph {
 	 * @return An integer.
 	 */
 	int around(int i): entry() && args(i) {
-		PrintWriter histogramWriter = null;
-		try {
-			histogramWriter = new PrintWriter(formatJoin(thisJoinPointStaticPart) + "-hist.csv");
-		} catch (IOException e) {
-			System.err.println("Failed to open files for tracing! Execution will continue, but with tracing disabled.");
-			e.printStackTrace();
-		}
-		
 		String key = formatJoin(thisJoinPointStaticPart);
-		this.histogram = new HashMap<>();
 		
 		// Update lastSignature to match method, and write the first node called.
 		this.signatureTrace = new Stack<>();
 		this.signatureTrace.push(thisJoinPointStaticPart.getSignature());
 
+		// If missing, initialise failures/successes
 		if(!this.failures.containsKey(key) || !this.successes.containsKey(key)) {
 			this.failures.put(key, 0);
 			this.successes.put(key, 0);
 		}
+
+		// Track histogram input
+		if(!this.histogram.containsKey(key)) this.histogram.put(key, new HashMap<Integer, Pair<Integer, Integer>>());
+		if(!this.histogram.get(key).containsKey(i)) this.histogram.get(key).put(i, new Pair<Integer, Integer>(0, 0));
+		this.histogram.get(key).get(i).a++;
 		
 		// Compute runtime
 		if(!this.runtimes.containsKey(key)) this.runtimes.put(key, new ArrayList<>());
 		long start = System.nanoTime();
 		int result = proceed(i);
 		long end = System.nanoTime();
-		this.runtimes.get(key).add(end - start);
+		this.runtimes.get(key).add((end - start) / 1_000_000.0);
+		
+		// Track histogram output
+		this.histogram.get(key).get(i).b++;
 
 		// Success!
 		this.successes.put(key, this.failures.get(key) + 1);
-		
-		// Write histograms
-		for(Map.Entry<Integer, Pair<Integer, Integer>> entry : this.histogram.entrySet()) {
-			histogramWriter.append(entry.getKey() + ", " + entry.getValue().a + ", " + entry.getValue().b + "\n");
-		}
-		
-		if(histogramWriter != null) histogramWriter.close();
 		
 		return result;
 	}
@@ -202,25 +200,22 @@ public aspect Graph {
 	 * @return An integer.
 	 */
 	int around(int i) throws Exception: entryex() && args(i) {
-		PrintWriter histogramWriter = null;
-		try {
-			histogramWriter = new PrintWriter(formatJoin(thisJoinPointStaticPart) + "-hist.csv");
-		} catch (IOException e) {
-			System.err.println("Failed to open files for tracing! Execution will continue, but with tracing disabled.");
-			e.printStackTrace();
-		}
-		
 		String key = formatJoin(thisJoinPointStaticPart);
-		this.histogram = new HashMap<>();
 		
 		// Update lastSignature to match method, and write the first node called.
 		this.signatureTrace = new Stack<>();
 		this.signatureTrace.push(thisJoinPointStaticPart.getSignature());
 
+		// If missing, initialise failures/successes
 		if(!this.failures.containsKey(key) || !this.successes.containsKey(key)) {
 			this.failures.put(key, 0);
 			this.successes.put(key, 0);
 		}
+
+		// Track histogram input
+		if(!this.histogram.containsKey(key)) this.histogram.put(key, new HashMap<Integer, Pair<Integer, Integer>>());
+		if(!this.histogram.get(key).containsKey(i)) this.histogram.get(key).put(i, new Pair<Integer, Integer>(0, 0));
+		this.histogram.get(key).get(i).a++;
 		
 		try {
 			// Compute runtime
@@ -228,23 +223,19 @@ public aspect Graph {
 			long start = System.nanoTime();
 			int result = proceed(i);
 			long end = System.nanoTime();
-			this.runtimes.get(key).add(end - start);
+			this.runtimes.get(key).add((end - start) / 1_000_000.0);
 
 			// Success!
 			this.successes.put(key, this.failures.get(key) + 1);
+			
+			// Track histogram output
+			this.histogram.get(key).get(i).b++;
 
 			return result;
 		} catch(Exception e) {
 			// Nope.
 			this.failures.put(key, this.failures.get(key) + 1);
 			throw e;
-		} finally {
-			// Write histograms
-			for(Map.Entry<Integer, Pair<Integer, Integer>> entry : this.histogram.entrySet()) {
-				histogramWriter.append(entry.getKey() + ", " + entry.getValue().a + ", " + entry.getValue().b + "\n");
-			}
-			
-			if(histogramWriter != null) histogramWriter.close();
 		}
 	}
 	
@@ -252,16 +243,19 @@ public aspect Graph {
 	 * Validate each cut, then add it to the list.
 	 */
 	before(int i): cut() && args(i) {
+		Signature sig = thisJoinPointStaticPart.getSignature();
+		String key = formatJoin(sig);
+		
 		// Check that the call is called by the last call (Hopefully that makes sense).
-		if(compareSignatures(this.signatureTrace.peek(), thisEnclosingJoinPointStaticPart.getSignature())) {
-			this.signatureTrace.push(thisJoinPointStaticPart.getSignature());
+		if(compareSignatures(this.signatureTrace.peek(), sig)) {
+			this.signatureTrace.push(sig);
 			
 			// Update histogram input
-			if(!this.histogram.containsKey(i)) this.histogram.put(i, new Pair<Integer, Integer>(0, 0));
-			this.histogram.get(i).a++;
+			if(!this.histogram.containsKey(key)) this.histogram.put(key, new HashMap<Integer, Pair<Integer, Integer>>());
+			if(!this.histogram.get(key).containsKey(i)) this.histogram.get(key).put(i, new Pair<Integer, Integer>(0, 0));
+			this.histogram.get(key).get(i).a++;
 			
 			// Ensure that call key exists to avoid exceptions
-			String key = formatJoin(thisJoinPointStaticPart);
 			if(!this.failures.containsKey(key) || !this.successes.containsKey(key)) {
 				this.failures.put(key, 0);
 				this.successes.put(key, 0);
@@ -270,15 +264,18 @@ public aspect Graph {
 	}
 	
 	after() returning(int i): cut() {
+		Signature sig = thisJoinPointStaticPart.getSignature();
+		String key = formatJoin(sig);
+		
 		// Check that the call is called by the last call (Hopefully that makes sense).
-		if(compareSignatures(this.signatureTrace.peek(), thisJoinPointStaticPart.getSignature())) {
+		if(compareSignatures(this.signatureTrace.peek(), sig)) {
 			this.signatureTrace.pop();
 
 			// Update histogram output
-			if(!this.histogram.containsKey(i)) this.histogram.put(i, new Pair<Integer, Integer>(0, 0));
-			this.histogram.get(i).b++;
+			if(!this.histogram.containsKey(key)) this.histogram.put(key, new HashMap<Integer, Pair<Integer, Integer>>());
+			if(!this.histogram.get(key).containsKey(i)) this.histogram.get(key).put(i, new Pair<Integer, Integer>(0, 0));
+			this.histogram.get(key).get(i).b++;
 			
-			String key = formatJoin(thisJoinPointStaticPart);
 			this.successes.put(key, this.successes.get(key) + 1);
 		}
 	}

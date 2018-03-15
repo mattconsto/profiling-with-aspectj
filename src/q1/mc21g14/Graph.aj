@@ -1,11 +1,8 @@
 package q1.mc21g14;
 
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.util.Stack;
-
-import org.aspectj.lang.JoinPoint;
-import org.aspectj.lang.Signature;
+import java.io.*;
+import java.util.*;
+import org.aspectj.lang.*;
 
 // Write an aspect that constructs the dynamic call graph
 // of a Java program restricted to all public methods 
@@ -14,33 +11,20 @@ import org.aspectj.lang.Signature;
 // any of the packages within the q1 hierarchy.
 
 public aspect Graph {
-	/**
-	 * A helper class that stores the signature, list of edges, and list of nodes.
-	 */
-	public class Trace {
-		public Signature signature;
-		public String edges;
-		public String nodes;
-		
-		public Trace(Signature signature, String edges, String nodes) {
-			this.signature = signature;
-			this.edges     = edges;
-			this.nodes     = nodes;
-		}
-	}
-	
 	// Define each pointcut used, for cleaner code.
 	pointcut any():   call(* *(..)); // Matches any call, anywhere.
 	pointcut main():  execution(public static void main(String[])) && !cflowbelow(any()); // Matches the original main method.
-	pointcut entry(): call(public * q1..*(int)) && !within(q1..*); // Matches the entry into anything in q1.
+	pointcut entry(): call(public * q1..*(int)) && (!within(q1..*) || (within(q1..*) && main())); // Matches the entry into anything in q1.
 	pointcut cut():   cflowbelow(entry()) && call(* q1..*(int)); // Any valid call below an entry point.
 	
 	// Writers for tracing.
-	PrintWriter edgeWriter;
-	PrintWriter nodeWriter;
+	protected PrintWriter edgeWriter;
+	protected PrintWriter nodeWriter;
 	
-	// Stack for keeping track
-	Stack<Trace> stackTrace = new Stack<>();
+	// Variables for keeping track
+	protected Stack<Signature> signatures = new Stack<>();
+	protected String edges;
+	protected String nodes;
 	
 	/**
 	 * Nicely format the JoinPoint according to the specification, stripping out the return type.
@@ -93,13 +77,15 @@ public aspect Graph {
 	 */
 	int around(int i): entry() && args(i) {
 		// Update lastSignature to match method, and write the first node called.
-		this.stackTrace = new Stack<>();
-		this.stackTrace.push(new Trace(thisJoinPointStaticPart.getSignature(), "", formatJoin(thisJoinPointStaticPart) + "\n"));
+		this.signatures = new Stack<>();
+		this.signatures.push(thisJoinPointStaticPart.getSignature());
+		this.edges = "";
+		this.nodes = formatJoin(thisJoinPointStaticPart) + "\n";
 
 		int result = proceed(i);
 		
-		this.edgeWriter.append(this.stackTrace.peek().edges);
-		this.nodeWriter.append(this.stackTrace.peek().nodes);
+		this.edgeWriter.append(this.edges);
+		this.nodeWriter.append(this.nodes);
 		
 		return result;
 	}
@@ -109,15 +95,14 @@ public aspect Graph {
 	 */
 	before(): cut() {
 		// Check that the call is called by the last call (Hopefully that makes sense).
-		if(compareSignatures(this.stackTrace.peek().signature, thisEnclosingJoinPointStaticPart.getSignature())) {
+		if(compareSignatures(this.signatures.peek(), thisEnclosingJoinPointStaticPart.getSignature())) {
 			// Stringify
 			String source = formatJoin(thisEnclosingJoinPointStaticPart);
 			String target = formatJoin(thisJoinPointStaticPart);
 			
-			this.stackTrace.push(new Trace(thisJoinPointStaticPart.getSignature(), 
-				this.stackTrace.peek().edges + source + " -> " + target + "\n", 
-				this.stackTrace.peek().nodes + target + "\n"
-			));
+			this.signatures.push(thisJoinPointStaticPart.getSignature());
+			this.edges += source + " -> " + target + "\n"; 
+			this.nodes += target + "\n";
 		}
 	}
 	
@@ -126,11 +111,9 @@ public aspect Graph {
 	 */
 	after(): cut() {
 		// Check that the call is called by the last call (Hopefully that makes sense).
-		if(compareSignatures(this.stackTrace.peek().signature, thisJoinPointStaticPart.getSignature())) {
-			// Move the last element up the stack, keeping signature intact
-			Trace item = this.stackTrace.pop();
-			Signature signature = this.stackTrace.pop().signature;
-			this.stackTrace.push(new Trace(signature, item.edges, item.nodes));
+		if(compareSignatures(this.signatures.peek(), thisJoinPointStaticPart.getSignature())) {
+			// Remove the last signature from the stack
+			this.signatures.pop();
 		}
 	}
 }
